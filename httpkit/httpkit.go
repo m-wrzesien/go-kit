@@ -1,6 +1,7 @@
 package httpkit
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -9,14 +10,15 @@ import (
 )
 
 const (
-	HeaderAccept         = "Accept"
-	HeaderAcceptEncoding = "Accept-Encoding"
-	HeaderAcceptLanguage = "Accept-Language"
-	HeaderCacheControl   = "Cache-Control"
-	HeaderContentType    = "Content-Type"
-	HeaderReferer        = "Referer"
-	HeaderUserAgent      = "User-Agent"
-	HeaderXForwardedFor  = "X-Forwarded-For"
+	HeaderAccept          = "Accept"
+	HeaderAcceptEncoding  = "Accept-Encoding"
+	HeaderAcceptLanguage  = "Accept-Language"
+	HeaderCacheControl    = "Cache-Control"
+	HeaderContentType     = "Content-Type"
+	HeaderReferer         = "Referer"
+	HeaderUserAgent       = "User-Agent"
+	HeaderXForwardedFor   = "X-Forwarded-For"
+	HeaderXForwardedProto = "X-Forwarded-Proto"
 
 	MIMEApplicationJSON = "application/json"
 	MIMETextHTML        = "text/html"
@@ -37,20 +39,32 @@ func CacheMiddleware(t time.Duration, next http.Handler) http.HandlerFunc {
 	}
 }
 
-// RealIPMiddleware replaces r.RemoteAddr with IP from X-Fowarded-For header if it comes from address contained in tn
-func RealIPMiddleware(tn *net.IPNet, next http.HandlerFunc) http.HandlerFunc {
+// ProxyHeadersMiddleware sets cliend address and scheme in [http.Request.Context] if request comes from proxy address contained in tn
+func ProxyHeadersMiddleware(tn *net.IPNet, next http.HandlerFunc) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var ip string
+		var ip, scheme string
 
 		currIP, _, _ := strings.Cut(r.RemoteAddr, ":")
 
 		if xff := r.Header.Get(HeaderXForwardedFor); xff != "" && tn != nil && tn.Contains(net.ParseIP(currIP)) {
 			ip, _, _ = strings.Cut(xff, ",")
+			scheme = r.Header.Get(HeaderXForwardedProto)
 		}
 		if ip == "" || net.ParseIP(ip) == nil {
 			ip, _, _ = strings.Cut(r.RemoteAddr, ":")
 		}
-		r.RemoteAddr = ip
+
+		if r.TLS != nil {
+			scheme = "https"
+		}
+
+		if scheme == "" {
+			scheme = "http"
+		}
+
+		ctx := context.WithValue(r.Context(), contextRemoteAddr, ip)
+		ctx = context.WithValue(ctx, contextScheme, scheme)
+		r = r.WithContext(ctx)
 		next.ServeHTTP(w, r)
 	})
 }
